@@ -245,6 +245,147 @@ final class PersonalTranslationTest extends BaseTestCaseORM
         ], $this->queryLogger->queries[0]);
     }
 
+    public function testShouldSyncDefaultLocalePersonalTranslationBackToEntityOnInsert(): void
+    {
+        $this->translatableListener->setPersistDefaultLocaleTranslation(true);
+        $this->translatableListener->setPreferPersonalTranslationContent(true);
+
+        $article = new Article();
+        // intentionally do not set title; the default-locale personal translation should drive it
+        $article->setTitle('');
+
+        $enTranslation = new PersonalArticleTranslation();
+        $enTranslation
+            ->setField('title')
+            ->setContent('Hello')
+            ->setObject($article)
+            ->setLocale('en')
+        ;
+        $this->em->persist($enTranslation);
+
+        $deTranslation = new PersonalArticleTranslation();
+        $deTranslation
+            ->setField('title')
+            ->setContent('Hallo')
+            ->setObject($article)
+            ->setLocale('de')
+        ;
+        $this->em->persist($deTranslation);
+
+        $this->em->persist($article);
+        $this->em->flush();
+        $this->em->clear();
+
+        $reloaded = $this->em->find(Article::class, ['id' => $article->getId()]);
+        static::assertSame('Hello', $reloaded->getTitle());
+
+        $trans = $this->em->createQuery('SELECT t FROM '.PersonalArticleTranslation::class.' t')->getArrayResult();
+        static::assertCount(2, $trans);
+        $byLocale = [];
+        foreach ($trans as $row) {
+            $byLocale[$row['locale']] = $row['content'];
+        }
+        static::assertSame('Hello', $byLocale['en']);
+        static::assertSame('Hallo', $byLocale['de']);
+    }
+
+    public function testShouldSyncDefaultLocalePersonalTranslationBackToEntityOnUpdate(): void
+    {
+        $this->translatableListener->setPersistDefaultLocaleTranslation(true);
+        $this->translatableListener->setPreferPersonalTranslationContent(true);
+
+        $article = new Article();
+        $article->setTitle('original');
+
+        $enTranslation = new PersonalArticleTranslation();
+        $enTranslation
+            ->setField('title')
+            ->setContent('original')
+            ->setObject($article)
+            ->setLocale('en')
+        ;
+        $this->em->persist($enTranslation);
+
+        $this->em->persist($article);
+        $this->em->flush();
+        $articleId = $article->getId();
+        $this->em->clear();
+
+        $reloaded = $this->em->find(Article::class, ['id' => $articleId]);
+        $existingEnTranslation = null;
+        foreach ($reloaded->getTranslations() as $t) {
+            if ('en' === $t->getLocale() && 'title' === $t->getField()) {
+                $existingEnTranslation = $t;
+
+                break;
+            }
+        }
+        static::assertNotNull($existingEnTranslation);
+
+        // Modify only the personal translation content; leave the entity field untouched
+        $existingEnTranslation->setContent('updated');
+        $this->em->flush();
+        $this->em->clear();
+
+        $reloaded = $this->em->find(Article::class, ['id' => $articleId]);
+        static::assertSame('updated', $reloaded->getTitle());
+
+        $trans = $this->em->createQuery('SELECT t FROM '.PersonalArticleTranslation::class.' t')->getArrayResult();
+        static::assertCount(1, $trans);
+        static::assertSame('updated', $trans[0]['content']);
+    }
+
+    public function testShouldNotAffectBehaviorWhenFlagDisabled(): void
+    {
+        // Mirror of testShouldOverrideTranslationInEntityBeingTranslated, with the new flag explicitly off:
+        // existing behavior must be preserved (entity field wins over the personal translation content).
+        $this->translatableListener->setPreferPersonalTranslationContent(false);
+        $this->translatableListener->setDefaultLocale('de');
+
+        $article = new Article();
+        $article->setTitle('override');
+
+        $enTranslation = new PersonalArticleTranslation();
+        $enTranslation
+            ->setField('title')
+            ->setContent('en')
+            ->setObject($article)
+            ->setLocale('en')
+        ;
+        $this->em->persist($enTranslation);
+        $this->em->persist($article);
+        $this->em->flush();
+
+        $trans = $this->em->createQuery('SELECT t FROM '.PersonalArticleTranslation::class.' t')->getArrayResult();
+        static::assertCount(1, $trans);
+        static::assertSame('override', $trans[0]['content']);
+    }
+
+    public function testShouldNotApplyWithoutPersistDefaultLocaleTranslation(): void
+    {
+        // Flag on, but persistDefaultLocaleTranslation left off: behavior must be unchanged.
+        $this->translatableListener->setPersistDefaultLocaleTranslation(false);
+        $this->translatableListener->setPreferPersonalTranslationContent(true);
+
+        $article = new Article();
+        $article->setTitle('entity-wins');
+
+        $enTranslation = new PersonalArticleTranslation();
+        $enTranslation
+            ->setField('title')
+            ->setContent('translation-content')
+            ->setObject($article)
+            ->setLocale('en')
+        ;
+        $this->em->persist($enTranslation);
+        $this->em->persist($article);
+        $this->em->flush();
+        $this->em->clear();
+
+        $reloaded = $this->em->find(Article::class, ['id' => $article->getId()]);
+        static::assertSame('entity-wins', $reloaded->getTitle());
+    }
+
     protected function getUsedEntityFixtures(): array
     {
         return [
