@@ -335,6 +335,89 @@ final class PersonalTranslationTest extends BaseTestCaseORM
         static::assertSame('updated', $trans[0]['content']);
     }
 
+    public function testShouldSyncOnInsertWhenWorkingInNonDefaultLocale(): void
+    {
+        // Admin UI is opened in a non-default locale and submits all personal
+        // translations; the entity row's column must end up holding the default
+        // locale's content, and each translation row must keep the content the
+        // user authored (no clobbering from the entity field).
+        $this->translatableListener->setPersistDefaultLocaleTranslation(true);
+        $this->translatableListener->setPreferPersonalTranslationContent(true);
+        $this->translatableListener->setTranslatableLocale('de');
+
+        $article = new Article();
+        $article->setTitle('');
+
+        $en = new PersonalArticleTranslation();
+        $en->setField('title')->setContent('Hello')->setObject($article)->setLocale('en');
+        $this->em->persist($en);
+
+        $de = new PersonalArticleTranslation();
+        $de->setField('title')->setContent('Hallo')->setObject($article)->setLocale('de');
+        $this->em->persist($de);
+
+        $this->em->persist($article);
+        $this->em->flush();
+        $this->em->clear();
+
+        $rows = $this->em->createQuery('SELECT a.id, a.title FROM '.Article::class.' a')->getArrayResult();
+        static::assertCount(1, $rows);
+        static::assertSame('Hello', $rows[0]['title']);
+
+        $trans = $this->em
+            ->createQuery('SELECT t.locale, t.content FROM '.PersonalArticleTranslation::class.' t ORDER BY t.locale')
+            ->getArrayResult();
+        static::assertCount(2, $trans);
+        static::assertSame(['locale' => 'de', 'content' => 'Hallo'], $trans[0]);
+        static::assertSame(['locale' => 'en', 'content' => 'Hello'], $trans[1]);
+    }
+
+    public function testShouldPersistSyncedTitleToDatabaseOnUpdate(): void
+    {
+        // When only the personal translation in the default locale is
+        // modified (entity itself untouched), the entity's column in the DB must
+        // also be updated. Verified via getArrayResult to bypass postLoad, which
+        // would otherwise mask a stale DB column by re-deriving the title from the
+        // (already-updated) translation row.
+        $this->translatableListener->setPersistDefaultLocaleTranslation(true);
+        $this->translatableListener->setPreferPersonalTranslationContent(true);
+
+        $article = new Article();
+        $article->setTitle('original');
+
+        $enTranslation = new PersonalArticleTranslation();
+        $enTranslation
+            ->setField('title')
+            ->setContent('original')
+            ->setObject($article)
+            ->setLocale('en')
+        ;
+        $this->em->persist($enTranslation);
+        $this->em->persist($article);
+        $this->em->flush();
+        $articleId = $article->getId();
+        $this->em->clear();
+
+        $reloaded = $this->em->find(Article::class, ['id' => $articleId]);
+        $existingEnTranslation = null;
+        foreach ($reloaded->getTranslations() as $t) {
+            if ('en' === $t->getLocale() && 'title' === $t->getField()) {
+                $existingEnTranslation = $t;
+
+                break;
+            }
+        }
+        static::assertNotNull($existingEnTranslation);
+
+        $existingEnTranslation->setContent('updated');
+        $this->em->flush();
+        $this->em->clear();
+
+        $rows = $this->em->createQuery('SELECT a.id, a.title FROM '.Article::class.' a')->getArrayResult();
+        static::assertCount(1, $rows);
+        static::assertSame('updated', $rows[0]['title']);
+    }
+
     public function testShouldNotAffectBehaviorWhenFlagDisabled(): void
     {
         // Mirror of testShouldOverrideTranslationInEntityBeingTranslated, with the new flag explicitly off:
