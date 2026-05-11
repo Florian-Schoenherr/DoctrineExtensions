@@ -770,6 +770,23 @@ class TranslatableListener extends MappedEventSubscriber
                 }
             }
 
+            // Sync-back: also accept a user-modified existing translation row
+            // (scheduledObjectUpdates) for the current locale, so its content
+            // wins over the entity field instead of being clobbered.
+            if ($shouldSyncBackPersonal && null === $translation) {
+                foreach ($ea->getScheduledObjectUpdates($uow) as $trans) {
+                    if (get_class($trans) === $translationClass
+                        && $trans->getLocale() === $locale
+                        && $trans->getField() === $field
+                        && $this->belongsToObject($ea, $trans, $object)) {
+                        $translation = $trans;
+                        $wasPersistedSeparetely = true;
+
+                        break;
+                    }
+                }
+            }
+
             // check if translation already is created
             if (!$isInsert && !$translation) {
                 \assert($wrapped instanceof AbstractWrapper);
@@ -834,7 +851,15 @@ class TranslatableListener extends MappedEventSubscriber
                 }
             }
 
-            if (($isInsert || $shouldSyncBackPersonal) && null !== $this->getTranslationInDefaultLocale($oid, $field)) {
+            // Inner mirror block. For sync-back updates in a non-default
+            // locale we deliberately skip it: the trailing block below
+            // (locale !== defaultLocale path) already has the machinery to
+            // apply tracked default-locale content to the entity AFTER the
+            // changeset cleanup, which would otherwise wipe this mirror.
+            if (
+                ($isInsert || ($shouldSyncBackPersonal && $locale === $this->defaultLocale))
+                && null !== $this->getTranslationInDefaultLocale($oid, $field)
+            ) {
                 // We can't rely on object field value which is created in non-default locale.
                 // If we provide translation for default locale as well, the latter is considered to be trusted
                 // and object content should be overridden.

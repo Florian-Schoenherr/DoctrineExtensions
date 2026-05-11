@@ -372,6 +372,67 @@ final class PersonalTranslationTest extends BaseTestCaseORM
         static::assertSame(['locale' => 'en', 'content' => 'Hello'], $trans[1]);
     }
 
+    public function testShouldSaveBothLocalesWhenUpdatingTranslationsInNonDefaultLocale(): void
+    {
+        // Default locale = 'en', listener (admin UI) locale = 'de'. User saves
+        // edits for both the en and de personal translation rows in one go.
+        // Both rows must be updated in the DB and the entity column must end
+        // up with the default-locale content.
+        $this->translatableListener->setPersistDefaultLocaleTranslation(true);
+        $this->translatableListener->setPreferPersonalTranslationContent(true);
+
+        $article = new Article();
+        $article->setTitle('initial');
+
+        $en = new PersonalArticleTranslation();
+        $en->setField('title')->setContent('initial en')->setObject($article)->setLocale('en');
+        $this->em->persist($en);
+
+        $de = new PersonalArticleTranslation();
+        $de->setField('title')->setContent('initial de')->setObject($article)->setLocale('de');
+        $this->em->persist($de);
+
+        $this->em->persist($article);
+        $this->em->flush();
+        $articleId = $article->getId();
+        $this->em->clear();
+
+        $this->translatableListener->setTranslatableLocale('de');
+        $reloaded = $this->em->find(Article::class, ['id' => $articleId]);
+
+        $enRow = null;
+        $deRow = null;
+        foreach ($reloaded->getTranslations() as $t) {
+            if ('title' !== $t->getField()) {
+                continue;
+            }
+            if ('en' === $t->getLocale()) {
+                $enRow = $t;
+            } elseif ('de' === $t->getLocale()) {
+                $deRow = $t;
+            }
+        }
+        static::assertNotNull($enRow);
+        static::assertNotNull($deRow);
+        $enRow->setContent('updated en');
+        $deRow->setContent('updated de');
+
+        $this->em->flush();
+        $this->em->clear();
+
+        $trans = $this->em
+            ->createQuery('SELECT t.locale, t.content FROM '.PersonalArticleTranslation::class.' t ORDER BY t.locale')
+            ->getArrayResult();
+        static::assertSame([
+            ['locale' => 'de', 'content' => 'updated de'],
+            ['locale' => 'en', 'content' => 'updated en'],
+        ], $trans);
+
+        $rows = $this->em->createQuery('SELECT a.id, a.title FROM '.Article::class.' a')->getArrayResult();
+        static::assertCount(1, $rows);
+        static::assertSame('updated en', $rows[0]['title']);
+    }
+
     public function testShouldPersistSyncedTitleToDatabaseOnUpdate(): void
     {
         // When only the personal translation in the default locale is
